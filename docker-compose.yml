@@ -22,7 +22,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    volumes:
+    #volumes:
       # 可选：挂载配置文件以便热更新模型配置
       # - ./config.py:/app/config.py:ro
     networks:
