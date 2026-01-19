@@ -1,0 +1,14 @@
+# NVIDIA Rerank Adapter Dependencies
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Environment Variables
+python-dotenv>=1.0.0
