@@ -52,17 +52,7 @@ MODEL_CONFIGS: Dict[str, Dict[str, str]] = {
     "nvidia/rerank-qa-mistral-4b": {
         "url": "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking",
         "model": "nvidia/rerank-qa-mistral-4b"
-    },
-    # NVIDIA NV Rerank QA Mistral 4B (alternative)
-    "nvidia/nv-rerank-qa-mistral-4b": {
-        "url": "https://ai.api.nvidia.com/v1/retrieval/nvidia/nv-rerank-qa-mistral-4b/reranking",
-        "model": "nvidia/nv-rerank-qa-mistral-4b"
-    },
-    # NVIDIA Llama3 Reranker
-    "nvidia/llama-3.2-nv-rerankqa-1b-v2": {
-        "url": "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-3.2-nv-rerankqa-1b-v2/reranking",
-        "model": "nvidia/llama-3.2-nv-rerankqa-1b-v2"
-    },
+    }
     # Add more models as needed...
 }
 

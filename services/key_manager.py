@@ -198,5 +198,5 @@ from config import settings
 key_manager = KeyManager(
     api_keys=settings.nvidia_api_keys,
     max_failures=3,
-    cooldown_seconds=300
+    cooldown_seconds=90
 )
