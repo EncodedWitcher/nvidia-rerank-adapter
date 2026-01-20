@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routers import rerank_router
+from routers import rerank_router, embeddings_router
 from services.key_manager import key_manager
 
 # Configure logging
@@ -112,6 +112,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(rerank_router)
+app.include_router(embeddings_router)
 
 
 @app.get("/", tags=["Health"])
@@ -124,6 +125,7 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "rerank": "/v1/rerank",
+            "embeddings": "/v1/embeddings",
             "models": "/v1/models",
             "health": "/health"
         }

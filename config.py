@@ -21,12 +21,24 @@ class Settings:
         # Default model to use if not specified in request
         self.default_model: str = os.getenv("DEFAULT_MODEL", "nvidia/rerank-qa-mistral-4b")
         
+        # Default embedding model (used when upstream model not found)
+        self.default_embedding_model: str = os.getenv("DEFAULT_EMBEDDING_MODEL", "baai/bge-m3")
+        
+        # NVIDIA Embeddings API URL
+        self.nvidia_embeddings_url: str = os.getenv(
+            "NVIDIA_EMBEDDINGS_URL", 
+            "https://integrate.api.nvidia.com/v1/embeddings"
+        )
+        
         # Server configuration
         self.host: str = os.getenv("HOST", "0.0.0.0")
         self.port: int = int(os.getenv("PORT", "8000"))
         
         # Request timeout in seconds
         self.request_timeout: int = int(os.getenv("REQUEST_TIMEOUT", "30"))
+        
+        # Retry wait time when all keys are rate limited (seconds)
+        self.retry_wait_seconds: int = int(os.getenv("RETRY_WAIT_SECONDS", "5"))
         
         # API Key for authentication (optional)
         self.api_key: Optional[str] = os.getenv("API_KEY", None)

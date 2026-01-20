@@ -108,13 +108,6 @@ async def rerank(
             detail="Service unavailable: No API keys configured"
         )
     
-    if key_manager.active_keys == 0:
-        logger.warning("All API keys are on cooldown")
-        raise HTTPException(
-            status_code=503,
-            detail="Service temporarily unavailable: All API keys are on cooldown"
-        )
-    
     try:
         # Execute rerank request
         response = await nvidia_client.rerank(request)

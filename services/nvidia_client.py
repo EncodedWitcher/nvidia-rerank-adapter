@@ -1,11 +1,12 @@
 """
-NVIDIA API Client for Rerank Adapter.
+NVIDIA API Client for Rerank and Embeddings Adapter.
 Handles format conversion and API communication with NVIDIA.
 """
 
+import asyncio
 import math
 import logging
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 import httpx
 
 from models import (
@@ -25,12 +26,13 @@ logger = logging.getLogger(__name__)
 
 class NvidiaClient:
     """
-    Client for interacting with NVIDIA Rerank API.
+    Client for interacting with NVIDIA Rerank and Embeddings API.
     
     Handles:
     - Format conversion between OpenAI and NVIDIA formats
-    - API key rotation
-    - Error handling and retries
+    - API key rotation with round-robin
+    - 429 rate limit handling with retry
+    - Model fallback for embeddings
     """
     
     def __init__(self, timeout: int = 30):
@@ -41,6 +43,124 @@ class NvidiaClient:
             timeout: Request timeout in seconds
         """
         self.timeout = timeout
+    
+    async def _make_request_with_retry(
+        self,
+        url: str,
+        payload: Dict[str, Any],
+        fallback_model: Optional[str] = None
+    ) -> httpx.Response:
+        """
+        Make HTTP request with key rotation and 429 retry logic.
+        
+        Args:
+            url: The API endpoint URL
+            payload: The request payload (will be sent as JSON)
+            fallback_model: Optional fallback model to use if model not found
+            
+        Returns:
+            The successful HTTP response
+            
+        Raises:
+            ValueError: If no API keys are configured
+            Exception: If the request fails after all retries
+        """
+        if key_manager.total_keys == 0:
+            raise ValueError("No API keys available. Please configure NVIDIA_API_KEYS.")
+        
+        consecutive_429_count = 0
+        last_error: Optional[Exception] = None
+        
+        while True:
+            # Get next available API key
+            api_key = key_manager.get_next_key()
+            if not api_key:
+                raise ValueError("No API keys available. Please configure NVIDIA_API_KEYS.")
+            
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        url,
+                        json=payload,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json"
+                        }
+                    )
+                    
+                    # Handle 429 rate limit
+                    if response.status_code == 429:
+                        consecutive_429_count += 1
+                        logger.warning(
+                            f"Rate limited (429) - consecutive count: {consecutive_429_count}"
+                        )
+                        
+                        # If all keys have been tried, wait before next round
+                        if consecutive_429_count >= key_manager.total_keys:
+                            logger.warning(
+                                f"All {key_manager.total_keys} keys rate limited. "
+                                f"Waiting {settings.retry_wait_seconds}s before retry..."
+                            )
+                            await asyncio.sleep(settings.retry_wait_seconds)
+                            consecutive_429_count = 0
+                        continue
+                    
+                    # Reset 429 counter on non-429 response
+                    consecutive_429_count = 0
+                    
+                    # Handle model not found - retry with fallback model
+                    if response.status_code == 404 and fallback_model:
+                        error_text = response.text.lower()
+                        if "model" in error_text or "not found" in error_text:
+                            logger.warning(
+                                f"Model not found, retrying with fallback model: {fallback_model}"
+                            )
+                            payload["model"] = fallback_model
+                            # Retry with fallback model
+                            response = await client.post(
+                                url,
+                                json=payload,
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                    "Accept": "application/json"
+                                }
+                            )
+                            # If still 429, continue the loop
+                            if response.status_code == 429:
+                                consecutive_429_count += 1
+                                continue
+                    
+                    # Handle authentication error
+                    if response.status_code == 401:
+                        logger.error(f"Authentication failed for key")
+                        last_error = Exception(f"Authentication failed: {response.text}")
+                        # Try next key
+                        continue
+                    
+                    # Handle server errors - retry with next key
+                    if response.status_code >= 500:
+                        logger.error(f"NVIDIA server error: {response.text}")
+                        last_error = Exception(f"Server error: {response.text}")
+                        continue
+                    
+                    # Raise for other HTTP errors
+                    response.raise_for_status()
+                    
+                    return response
+                    
+            except httpx.TimeoutException as e:
+                logger.error(f"Request timeout: {e}")
+                last_error = e
+                # Continue to try next key
+            except httpx.RequestError as e:
+                logger.error(f"Request error: {e}")
+                last_error = e
+                # Continue to try next key
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}")
+                raise
     
     @staticmethod
     def convert_to_nvidia_format(
@@ -141,73 +261,40 @@ class NvidiaClient:
         # Convert request format
         nvidia_request = self.convert_to_nvidia_format(request, nvidia_model)
         
-        # Try with different keys on failure
-        last_error: Optional[Exception] = None
-        max_retries = min(3, key_manager.total_keys) if key_manager.total_keys > 0 else 1
+        # Make request with retry logic
+        response = await self._make_request_with_retry(
+            url=nvidia_url,
+            payload=nvidia_request.model_dump()
+        )
         
-        for attempt in range(max_retries):
-            # Get next available API key
-            api_key = key_manager.get_next_key()
-            if not api_key:
-                raise ValueError("No API keys available. Please configure NVIDIA_API_KEYS.")
+        # Parse response
+        nvidia_response = NvidiaRerankResponse.model_validate(response.json())
+        
+        # Convert and return response
+        return self.convert_from_nvidia_format(nvidia_response, request.top_n)
+    
+    async def embeddings(self, request_body: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute an embeddings request against NVIDIA API.
+        Transparently forwards the request and handles 429 retry and model fallback.
+        
+        Args:
+            request_body: The raw request body to forward
             
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        nvidia_url,
-                        json=nvidia_request.model_dump(),
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json",
-                            "Accept": "application/json"
-                        }
-                    )
-                    
-                    # Check for HTTP errors
-                    if response.status_code == 401:
-                        logger.error(f"Authentication failed for key (attempt {attempt + 1})")
-                        key_manager.report_failure(api_key)
-                        last_error = Exception(f"Authentication failed: {response.text}")
-                        continue
-                    
-                    if response.status_code == 429:
-                        logger.warning(f"Rate limited (attempt {attempt + 1})")
-                        key_manager.report_failure(api_key)
-                        last_error = Exception(f"Rate limited: {response.text}")
-                        continue
-                    
-                    if response.status_code >= 500:
-                        logger.error(f"NVIDIA server error (attempt {attempt + 1}): {response.text}")
-                        last_error = Exception(f"Server error: {response.text}")
-                        continue
-                    
-                    response.raise_for_status()
-                    
-                    # Parse response
-                    nvidia_response = NvidiaRerankResponse.model_validate(response.json())
-                    
-                    # Report success and reset failure count
-                    key_manager.report_success(api_key)
-                    
-                    # Convert and return response
-                    return self.convert_from_nvidia_format(nvidia_response, request.top_n)
-                    
-            except httpx.TimeoutException as e:
-                logger.error(f"Request timeout (attempt {attempt + 1}): {e}")
-                key_manager.report_failure(api_key)
-                last_error = e
-            except httpx.RequestError as e:
-                logger.error(f"Request error (attempt {attempt + 1}): {e}")
-                key_manager.report_failure(api_key)
-                last_error = e
-            except Exception as e:
-                logger.error(f"Unexpected error (attempt {attempt + 1}): {e}")
-                last_error = e
-                # Don't report failure for non-API errors
-                raise
+        Returns:
+            The NVIDIA API response as a dictionary
+            
+        Raises:
+            Exception: If the request fails after all retries
+        """
+        # Make request with retry logic and model fallback
+        response = await self._make_request_with_retry(
+            url=settings.nvidia_embeddings_url,
+            payload=request_body,
+            fallback_model=settings.default_embedding_model
+        )
         
-        # All retries failed
-        raise Exception(f"All API requests failed. Last error: {last_error}")
+        return response.json()
 
 
 # Global client instance
